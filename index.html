@@ -65,15 +65,16 @@
 
   <div class="barcode-card">
     <svg id="barcode" role="img" aria-label="Generated barcode"></svg>
+    <p id="barcode-value" class="barcode-value" hidden></p>
     <p id="barcode-error" class="barcode-error" hidden></p>
   </div>
 
   <div class="format-row">
     <label for="format">Symbology</label>
     <select id="format">
-      <option value="auto" selected>Auto</option>
+      <option value="UPC" selected>UPC-A</option>
+      <option value="auto">Auto</option>
       <option value="CODE128">Code 128</option>
-      <option value="UPC">UPC-A</option>
       <option value="EAN13">EAN-13</option>
       <option value="EAN8">EAN-8</option>
       <option value="ITF">Interleaved 2 of 5</option>

@@ -21,6 +21,7 @@
     cameraError: $('camera-error'),
     digits: $('digits'),
     barcode: $('barcode'),
+    barcodeValue: $('barcode-value'),
     barcodeError: $('barcode-error'),
     format: $('format'),
     formatUsed: $('format-used'),
@@ -381,7 +382,7 @@
     g: '9', q: '9',
   };
   const DIGITISH = '0-9OoQDIiLl|!ZzSsbGTBgq';
-  const RUN = new RegExp('[' + DIGITISH + '](?:[ .\\-]?[' + DIGITISH + ']){5,19}', 'g');
+  const RUN = new RegExp('[' + DIGITISH + '](?:[ .\\-]?[' + DIGITISH + ']){3,19}', 'g');
 
   function toDigits(s) {
     let out = '';
@@ -392,11 +393,38 @@
     return out;
   }
 
+  /** OCR hands back the words around a code as well ("BANANAS 4011 lb"), and
+      several of those letters are in the lookalike table. Letters standing off
+      on their own past a space are neighbours rather than misread digits, so
+      drop them; ones touching the digits are left for digitRatio to judge. */
+  function trimEdges(raw) {
+    return raw.replace(/^[^0-9]*[ .\-]/, '').replace(/[ .\-][^0-9]*$/, '');
+  }
+
   /** How much of a candidate was already a real digit — keeps words like "SILO" out. */
   function digitRatio(raw) {
     const real = (raw.match(/[0-9]/g) || []).length;
     const converted = toDigits(raw).length;
     return converted ? real / converted : 0;
+  }
+
+  /* Which number wins when a frame holds several. Produce PLUs are 4 or 5
+     digits (4011 bananas, 94011 the organic one) and packaged goods carry a
+     full UPC or EAN; the lengths in between are nearly always a price, a date
+     or a weight, so they only win when nothing better is on screen. */
+  function codeScore(digits) {
+    const n = digits.length;
+    if (n === 12 || n === 13) return 3;   // UPC-A, EAN-13
+    if (n === 4 || n === 5) return 2;     // PLU
+    if (n === 8 || n === 11) return 1;    // EAN-8, or a UPC printed without its check digit
+    return 0;
+  }
+
+  function beats(candidate, incumbent) {
+    if (!incumbent) return true;
+    const a = codeScore(candidate);
+    const b = codeScore(incumbent);
+    return a === b ? candidate.length > incumbent.length : a > b;
   }
 
   function extractCode(text) {
@@ -405,21 +433,25 @@
 
     // First choice: digits sitting right after a "UPC" label (allowing OCR slop in the label).
     const labelled = cleaned.match(
-      new RegExp('U\\s*[PR]\\s*[CG60]\\s*[:#\\-]?\\s*([' + DIGITISH + '](?:[ .\\-]?[' + DIGITISH + ']){4,19})', 'i')
+      new RegExp('U\\s*[PR]\\s*[CG60]\\s*[:#\\-]?\\s*([' + DIGITISH + '](?:[ .\\-]?[' + DIGITISH + ']){3,19})', 'i')
     );
     if (labelled) {
-      const d = toDigits(labelled[1]);
-      if (d.length >= 6 && d.length <= 14 && digitRatio(labelled[1]) >= 0.5) return d;
+      const raw = trimEdges(labelled[1]);
+      const d = toDigits(raw);
+      if (d.length >= 4 && d.length <= 14 && digitRatio(raw) >= 0.5) return d;
     }
 
-    // Otherwise: the longest plausible number anywhere on screen.
+    // Otherwise: the most code-shaped number anywhere on screen.
     let best = null;
     for (const line of cleaned.split(/\r?\n/)) {
-      for (const match of line.match(RUN) || []) {
+      for (const match of (line.match(RUN) || []).map(trimEdges)) {
         const d = toDigits(match);
-        if (d.length < 8 || d.length > 14) continue;
+        if (d.length < 4 || d.length > 14) continue;
         if (digitRatio(match) < 0.7) continue;
-        if (!best || d.length > best.length) best = d;
+        // A short code only counts if it was printed as one solid number,
+        // otherwise every "$4.99" and "12 34" on the shelf reads as a PLU.
+        if (d.length < 8 && /[ .\-]/.test(match)) continue;
+        if (beats(d, best)) best = d;
       }
     }
     return best;
@@ -497,9 +529,8 @@
   function pickFormat(digits) {
     const chosen = el.format.value;
     if (chosen !== 'auto') return chosen;
-    if (digits.length === 11 || digits.length === 12) return 'UPC';
+    if (digits.length <= 12) return 'UPC';   // short codes get padded out below
     if (digits.length === 13) return 'EAN13';
-    if (digits.length === 8) return 'EAN8';
     return 'CODE128';
   }
 
@@ -508,6 +539,19 @@
     let sum = 0;
     for (let i = body.length - 1, w = 3; i >= 0; i--, w = w === 3 ? 1 : 3) sum += Number(body[i]) * w;
     return (10 - (sum % 10)) % 10;
+  }
+
+  /* The scanners these codes get shown to only read UPC-A, so a short number —
+     a 4- or 5-digit produce PLU, an in-store code — has to travel inside one:
+     right-align it in the 11-digit body, zero-fill the front, append the check
+     digit. 4011 becomes 000000040112, the same twelve digits a till looks up
+     when a cashier keys the PLU in by hand. A number that is already 12 digits
+     is passed through untouched so a real UPC still scans as itself. */
+  function toUpcA(digits) {
+    if (digits.length > 12) return null;
+    if (digits.length === 12) return digits;
+    const body = digits.padStart(11, '0');
+    return body + checkDigit(body);
   }
 
   function checkDigitHint(digits, format) {
@@ -520,24 +564,31 @@
   function renderBarcode() {
     const digits = el.digits.value.replace(/\D/g, '');
     el.barcode.innerHTML = '';
+    el.barcodeValue.hidden = true;
     el.barcodeError.hidden = true;
+    el.formatUsed.textContent = '';
 
-    if (!digits) {
-      el.formatUsed.textContent = '';
-      return fail('Enter some digits to build a barcode.');
-    }
+    if (!digits) return fail('Enter some digits to build a barcode.');
 
     const format = pickFormat(digits);
-    el.formatUsed.textContent = FORMAT_NAMES[format] + ' · ' + digits.length + ' digits';
+    const value = format === 'UPC' ? toUpcA(digits) : digits;
+    el.formatUsed.textContent = FORMAT_NAMES[format];
+
+    if (!value) {
+      return fail(
+        digits.length + ' digits is more than UPC-A can carry — it tops out at 12. ' +
+        'Shorten the number, or pick another symbology.'
+      );
+    }
 
     let ok = true;
     try {
-      JsBarcode(el.barcode, digits, {
+      JsBarcode(el.barcode, value, {
         format,
-        width: digits.length > 16 ? 2 : 3,
+        width: value.length > 16 ? 2 : 3,
         height: 130,
         margin: 12,
-        displayValue: false,     // the editable digits above are the human-readable line
+        displayValue: false,     // the line under the card carries the digits instead
         background: '#ffffff',
         lineColor: '#000000',
         valid: (v) => { ok = v; },
@@ -548,12 +599,17 @@
 
     if (!ok) {
       el.barcode.innerHTML = '';
+      const hint = checkDigitHint(value, format);
       return fail(
-        digits.length + ' digits is not a valid ' + FORMAT_NAMES[format] + ' code.' +
-        checkDigitHint(digits, format) +
-        ' Switch the symbology to Code 128 to encode any number.'
+        value.length + ' digits is not a valid ' + FORMAT_NAMES[format] + ' code.' +
+        (hint || ' Check the digits, or pick another symbology.')
       );
     }
+
+    // What the scanner will actually read, which for a padded PLU is not the
+    // same number as the one typed above.
+    el.barcodeValue.textContent = value;
+    el.barcodeValue.hidden = false;
   }
 
   function fail(message) {
@@ -601,6 +657,7 @@
   el.clearBtn.addEventListener('click', () => {
     el.digits.value = '';
     el.barcode.innerHTML = '';
+    el.barcodeValue.hidden = true;
     el.barcodeError.hidden = true;
     el.formatUsed.textContent = '';
     showCamera();
