@@ -19,16 +19,14 @@
       <span class="corner tl"></span><span class="corner tr"></span>
       <span class="corner bl"></span><span class="corner br"></span>
     </div>
-    <p class="reticle-hint">Line up the <b>UPC</b> line inside the box</p>
   </div>
 
   <div id="camera-error" class="overlay-message" hidden></div>
 
   <div class="camera-bar">
-    <button id="manual-btn" class="ghost-btn" type="button">Type it in</button>
+    <button id="manual-btn" class="ghost-btn" type="button">Type</button>
     <button id="scan-btn" class="shutter" type="button" aria-label="Scan">
       <span class="shutter-ring"></span>
-      <span class="shutter-label">SCAN</span>
     </button>
     <button id="flip-btn" class="ghost-btn" type="button" hidden>Flip</button>
   </div>
@@ -41,15 +39,13 @@
 <!-- ───────────────────────── RESULT VIEW ───────────────────────── -->
 <section id="result-view" class="view">
   <header class="result-header">
-    <h1>Scanned code</h1>
-    <p class="result-sub">Tap the numbers to fix them</p>
+    <h1>Scanned</h1>
   </header>
 
   <div class="code-editor">
     <input id="digits" class="digits" type="text" inputmode="numeric"
            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
            aria-label="Barcode digits">
-    <span class="edit-hint">✎ tap to edit</span>
   </div>
 
   <div class="barcode-card">
@@ -70,7 +66,7 @@
     <span id="format-used" class="format-used"></span>
   </div>
 
-  <button id="clear-btn" class="primary-btn" type="button">Clear &amp; scan again</button>
+  <button id="clear-btn" class="primary-btn" type="button">Clear</button>
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>

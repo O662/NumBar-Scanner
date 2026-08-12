@@ -71,14 +71,6 @@ html, body {
 .corner.bl { bottom: -1px; left: -1px; border-right: 0; border-top: 0; border-radius: 0 0 0 12px; }
 .corner.br { bottom: -1px; right: -1px; border-left: 0; border-top: 0; border-radius: 0 0 12px 0; }
 
-.reticle-hint {
-  margin: 18px 0 0;
-  font-size: 14px;
-  color: #fff;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
-}
-.reticle-hint b { color: var(--accent); }
-
 .camera-bar {
   position: absolute;
   left: 0;
@@ -127,13 +119,6 @@ html, body {
   transition: transform 0.1s ease;
 }
 .shutter:active .shutter-ring { transform: scale(0.92); }
-.shutter-label {
-  position: relative;
-  font-size: 15px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  color: var(--accent-ink);
-}
 .shutter[disabled] { opacity: 0.5; }
 
 .status {
@@ -191,7 +176,6 @@ html, body {
 
 .result-header { text-align: center; }
 .result-header h1 { margin: 0; font-size: 20px; letter-spacing: 0.01em; }
-.result-sub { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
 
 .code-editor {
   width: 100%;
@@ -217,7 +201,6 @@ html, body {
   outline: none;
 }
 .digits:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255, 192, 67, 0.18); }
-.edit-hint { font-size: 12px; color: var(--muted); }
 
 .barcode-card {
   width: 100%;
