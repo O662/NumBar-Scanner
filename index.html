@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f13">
+<title>NumBar Scanner</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>▌▏▌</text></svg>">
+</head>
+<body>
+
+<!-- ───────────────────────── CAMERA VIEW ───────────────────────── -->
+<section id="camera-view" class="view is-active">
+  <video id="video" playsinline muted autoplay></video>
+
+  <div id="reticle" aria-hidden="true">
+    <div class="reticle-box">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+    </div>
+    <p class="reticle-hint">Line up the <b>UPC</b> line inside the box</p>
+  </div>
+
+  <div id="camera-error" class="overlay-message" hidden></div>
+
+  <div class="camera-bar">
+    <button id="manual-btn" class="ghost-btn" type="button">Type it in</button>
+    <button id="scan-btn" class="shutter" type="button" aria-label="Scan">
+      <span class="shutter-ring"></span>
+      <span class="shutter-label">SCAN</span>
+    </button>
+    <button id="flip-btn" class="ghost-btn" type="button" hidden>Flip</button>
+  </div>
+
+  <div id="status" class="status" role="status" aria-live="polite" hidden>
+    <span class="spinner"></span><span id="status-text">Reading…</span>
+  </div>
+</section>
+
+<!-- ───────────────────────── RESULT VIEW ───────────────────────── -->
+<section id="result-view" class="view">
+  <header class="result-header">
+    <h1>Scanned code</h1>
+    <p class="result-sub">Tap the numbers to fix them</p>
+  </header>
+
+  <div class="code-editor">
+    <input id="digits" class="digits" type="text" inputmode="numeric"
+           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+           aria-label="Barcode digits">
+    <span class="edit-hint">✎ tap to edit</span>
+  </div>
+
+  <div class="barcode-card">
+    <svg id="barcode" role="img" aria-label="Generated barcode"></svg>
+    <p id="barcode-error" class="barcode-error" hidden></p>
+  </div>
+
+  <div class="format-row">
+    <label for="format">Symbology</label>
+    <select id="format">
+      <option value="auto" selected>Auto</option>
+      <option value="CODE128">Code 128</option>
+      <option value="UPC">UPC-A</option>
+      <option value="EAN13">EAN-13</option>
+      <option value="EAN8">EAN-8</option>
+      <option value="ITF">Interleaved 2 of 5</option>
+    </select>
+    <span id="format-used" class="format-used"></span>
+  </div>
+
+  <button id="clear-btn" class="primary-btn" type="button">Clear &amp; scan again</button>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
