@@ -7,16 +7,37 @@ no data leaves the device.
 ## How it works
 
 1. **Camera** — live preview with a reticle. Line the `UPC 4122074227` line up inside the box and tap **SCAN**.
-2. **OCR** — the frame inside the box is cropped, upscaled and contrast-stretched, then read by
+2. **Focus** — continuous autofocus is switched on with the stream, **tapping the preview** pins focus on that
+   spot for three seconds, and every scan re-focuses on the reticle before it reads a frame (a tap you just made
+   wins over that). See [Focus support](#focus-support) — Safari gives web pages no focus control at all.
+3. **OCR** — the frame inside the box is cropped, upscaled and contrast-stretched, then read by
    [Tesseract.js](https://tesseract.projectnaptha.com/). If the first pass finds nothing it retries
    rotated 90° and 270° (for when you're photographing a handheld device held sideways), then falls
    back to reading the whole frame.
-3. **Digits** — the text is searched for a number next to a `UPC` label first, then for the longest
+4. **Digits** — the text is searched for a number next to a `UPC` label first, then for the longest
    plausible 8–14 digit run anywhere on screen. Common OCR slips are corrected in number context
    (`O`→`0`, `l`→`1`, `S`→`5`, `B`→`8`, …) and spaced-out digits (`4 1 2 2 0 …`) are joined.
-4. **Barcode** — rendered with [JsBarcode](https://github.com/lindell/JsBarcode). The digits sit above
+5. **Barcode** — rendered with [JsBarcode](https://github.com/lindell/JsBarcode). The digits sit above
    the barcode in an editable field; **tap them to fix anything OCR got wrong** and the barcode
    redraws as you type. **Clear & scan again** wipes it and returns to the camera. That's all folks!
+
+## Focus support
+
+Focus is driven through `MediaStreamTrack.applyConstraints`, which browsers implement very unevenly:
+
+| Browser | Continuous AF | Tap to focus |
+| --- | --- | --- |
+| Chrome / Edge on Android | yes | yes, on the exact point |
+| Chrome on desktop | depends on the webcam | usually a plain refocus, no point |
+| Safari (iOS and macOS) | OS default only | no — the constraints don't exist |
+
+`pointsOfInterest` is never reported by `getCapabilities()`, so the app tries the tapped point and quietly
+falls back to a plain refocus if the device rejects it. Where there's no focus control at all, the first tap
+says so once rather than showing a focus ring that does nothing.
+
+None of this beats physics: most phone main cameras can't focus nearer than roughly 10 cm. If a label won't
+come sharp, back off and let the reticle crop do the work — the frame inside the box is upscaled before OCR
+anyway, so a smaller, sharp number reads better than a large, blurry one.
 
 ## Symbology
 
@@ -57,7 +78,7 @@ two. Pages serves over https, so the camera works.
 
 - [index.html](index.html) — markup for the two views (camera, result)
 - [app.css](app.css) — styling, mobile-first, dark
-- [app.js](app.js) — camera, image preprocessing, OCR, digit extraction, barcode rendering
+- [app.js](app.js) — camera, focus, image preprocessing, OCR, digit extraction, barcode rendering
 
 The two dependencies load from jsDelivr; the OCR language data (~15 MB, cached after first use)
 comes from the Tesseract.js CDN, so the first scan on a fresh device needs a connection.

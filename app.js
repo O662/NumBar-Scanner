@@ -11,6 +11,7 @@
     resultView: $('result-view'),
     video: $('video'),
     reticleBox: document.querySelector('.reticle-box'),
+    focusRing: $('focus-ring'),
     scanBtn: $('scan-btn'),
     manualBtn: $('manual-btn'),
     flipBtn: $('flip-btn'),
@@ -28,6 +29,7 @@
   };
 
   let stream = null;
+  let videoTrack = null;
   let facingMode = 'environment';
   let ocrWorkerPromise = null;
   let busy = false;
@@ -94,6 +96,9 @@
     el.video.srcObject = stream;
     try { await el.video.play(); } catch (_) { /* autoplay attrs usually cover this */ }
 
+    videoTrack = stream.getVideoTracks()[0] || null;
+    await enableContinuousFocus();
+
     // Only offer the flip button when there is something to flip to.
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -106,12 +111,123 @@
   function stopCamera() {
     if (stream) stream.getTracks().forEach((t) => t.stop());
     stream = null;
+    // The next camera may be a different lens with different focus capabilities.
+    videoTrack = null;
+    focusCaps = null;
+    pinnedUntil = 0;
+    clearTimeout(refocusTimer);
   }
 
   function showCameraError(message) {
     el.cameraError.textContent = message;
     el.cameraError.hidden = false;
     el.scanBtn.disabled = true;
+  }
+
+  /* ─────────────────────────── focus ───────────────────────────
+     A UPC line has to sit close to fill the reticle, and that is exactly where
+     phone cameras hunt: continuous AF keeps drifting onto whatever is behind
+     the label. So we hold continuous AF as the resting state, let a tap pin the
+     focus to one spot for a few seconds, and re-focus on the reticle just
+     before a scan. Where the browser exposes no focus control at all (Safari
+     ships none of these constraints) every call below no-ops and the tap
+     handler says so once instead of pretending. */
+
+  const REFOCUS_MS = 3000;    // how long a tapped focus point stays pinned
+  const AF_SETTLE_MS = 450;   // single-shot AF reports "applied", not "converged"
+
+  let focusCaps = null;
+  let refocusTimer = null;
+  let pinnedUntil = 0;
+  let focusHintShown = false;
+
+  function focusModes() {
+    if (!videoTrack || !videoTrack.getCapabilities) return [];
+    if (!focusCaps) {
+      try { focusCaps = videoTrack.getCapabilities() || {}; } catch (_) { focusCaps = {}; }
+    }
+    return focusCaps.focusMode || [];
+  }
+
+  function canFocus() {
+    const modes = focusModes();
+    return modes.includes('single-shot') || modes.includes('continuous');
+  }
+
+  async function applyFocus(constraint) {
+    if (!videoTrack) return false;
+    // advanced[] so a device that doesn't understand one of these just ignores
+    // it rather than failing the whole constraint set.
+    try {
+      await videoTrack.applyConstraints({ advanced: [constraint] });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function enableContinuousFocus() {
+    if (!focusModes().includes('continuous')) return false;
+    return applyFocus({ focusMode: 'continuous' });
+  }
+
+  /** Aim AF at one spot in the frame, given as normalised 0–1 coordinates. */
+  async function focusAt(point) {
+    if (!canFocus()) return false;
+    const mode = focusModes().includes('single-shot') ? 'single-shot' : 'continuous';
+
+    clearTimeout(refocusTimer);
+    // pointsOfInterest is never advertised in getCapabilities(), so the only way
+    // to learn whether a device takes one is to try, then retry without it — a
+    // plain re-apply still re-triggers AF, just wherever the camera prefers.
+    const applied = await applyFocus({ focusMode: mode, pointsOfInterest: [point] })
+      || await applyFocus({ focusMode: mode });
+    if (!applied) return false;
+
+    // single-shot leaves focus locked, so hand it back to continuous after a beat.
+    if (mode === 'single-shot') refocusTimer = setTimeout(enableContinuousFocus, REFOCUS_MS);
+    return true;
+  }
+
+  function settle() {
+    return new Promise((resolve) => setTimeout(resolve, AF_SETTLE_MS));
+  }
+
+  function regionCentre(region) {
+    return {
+      x: (region.sx + region.sw / 2) / region.vw,
+      y: (region.sy + region.sh / 2) / region.vh,
+    };
+  }
+
+  function showFocusRing(clientX, clientY) {
+    const view = el.cameraView.getBoundingClientRect();
+    el.focusRing.style.left = (clientX - view.left) + 'px';
+    el.focusRing.style.top = (clientY - view.top) + 'px';
+    el.focusRing.classList.remove('is-active');
+    void el.focusRing.offsetWidth;   // reflow, so a repeat tap replays the animation
+    el.focusRing.classList.add('is-active');
+  }
+
+  function handleFocusTap(e) {
+    if (!videoTrack || (e.target.closest && e.target.closest('button'))) return;
+    const point = framePoint(e.clientX, e.clientY);
+    if (!point) return;
+    if (!canFocus()) return focusUnsupportedHint();
+
+    showFocusRing(e.clientX, e.clientY);
+    pinnedUntil = Date.now() + REFOCUS_MS;
+    focusAt(point);
+  }
+
+  function focusUnsupportedHint() {
+    if (focusHintShown) return;
+    focusHintShown = true;
+    setStatus(
+      'This browser won’t let the page drive focus. Pull back a little — ' +
+      'most phone cameras can’t focus closer than about 10 cm.',
+      'note', 4600
+    );
   }
 
   /* ─────────────────────────── OCR ─────────────────────────── */
@@ -142,17 +258,40 @@
     return data && data.text;
   }
 
-  /** Map the on-screen reticle back onto the raw video frame (video uses object-fit: cover). */
-  function reticleInFrame() {
+  /** The video is object-fit: cover, so the frame is scaled up and cropped by
+      the edges of the element. This is the mapping back the other way. */
+  function coverFit() {
     const vw = el.video.videoWidth;
     const vh = el.video.videoHeight;
     const view = el.video.getBoundingClientRect();
-    const box = el.reticleBox.getBoundingClientRect();
     if (!vw || !vh || !view.width || !view.height) return null;
 
     const scale = Math.max(view.width / vw, view.height / vh);
-    const offsetX = (view.width - vw * scale) / 2;
-    const offsetY = (view.height - vh * scale) / 2;
+    return {
+      vw, vh, view, scale,
+      offsetX: (view.width - vw * scale) / 2,
+      offsetY: (view.height - vh * scale) / 2,
+    };
+  }
+
+  /** A viewport point as normalised frame coordinates, or null if it lands
+      outside the frame altogether — the camera has no such point to focus on. */
+  function framePoint(clientX, clientY) {
+    const fit = coverFit();
+    if (!fit) return null;
+
+    const x = (clientX - fit.view.left - fit.offsetX) / fit.scale / fit.vw;
+    const y = (clientY - fit.view.top - fit.offsetY) / fit.scale / fit.vh;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y };
+  }
+
+  /** Map the on-screen reticle back onto the raw video frame. */
+  function reticleInFrame() {
+    const fit = coverFit();
+    if (!fit) return null;
+    const { vw, vh, view, scale, offsetX, offsetY } = fit;
+    const box = el.reticleBox.getBoundingClientRect();
 
     const pad = 0.08; // a little slack so a near miss still lands inside
     let sx = (box.left - view.left - offsetX) / scale - box.width * pad / scale;
@@ -290,16 +429,22 @@
 
   async function scan() {
     if (busy) return;
-    if (!el.video.videoWidth) return setStatus('Camera is still warming up…', true, 1800);
+    if (!el.video.videoWidth) return setStatus('Camera is still warming up…', 'error', 1800);
 
     busy = true;
     el.scanBtn.disabled = true;
     setStatus('Loading text reader…');
 
     try {
-      const worker = await getOcrWorker();
       const region = reticleInFrame();
       if (!region) throw new Error('no frame');
+
+      // Re-focus on the reticle before reading it — but a recent tap wins, so we
+      // don't drag focus off a spot the user just picked. The OCR worker loads
+      // while AF settles, so this usually costs nothing.
+      const focusing = Date.now() < pinnedUntil ? null : focusAt(regionCentre(region));
+      const worker = await getOcrWorker();
+      if (focusing && await focusing) await settle();
 
       const full = { sx: 0, sy: 0, sw: region.vw, sh: region.vh, vw: region.vw, vh: region.vh };
       const passes = [
@@ -319,10 +464,10 @@
           return;
         }
       }
-      setStatus('No number found — hold steady, fill the box, avoid glare.', true, 3200);
+      setStatus('No number found — hold steady, fill the box, avoid glare.', 'error', 3200);
     } catch (err) {
       console.error(err);
-      setStatus('Text reader failed to load. Check your connection.', true, 3600);
+      setStatus('Text reader failed to load. Check your connection.', 'error', 3600);
     } finally {
       busy = false;
       el.scanBtn.disabled = false;
@@ -330,17 +475,19 @@
   }
 
   let statusTimer = null;
-  function setStatus(text, isError, autoHideMs) {
+  /** tone: omitted for work in progress (shows the spinner), 'error' or 'note'. */
+  function setStatus(text, tone, autoHideMs) {
     clearTimeout(statusTimer);
     el.statusText.textContent = text;
-    el.status.classList.toggle('is-error', !!isError);
+    el.status.classList.toggle('is-error', tone === 'error');
+    el.status.classList.toggle('is-note', tone === 'note');
     el.status.hidden = false;
     if (autoHideMs) statusTimer = setTimeout(hideStatus, autoHideMs);
   }
   function hideStatus() {
     clearTimeout(statusTimer);
     el.status.hidden = true;
-    el.status.classList.remove('is-error');
+    el.status.classList.remove('is-error', 'is-note');
   }
 
   /* ─────────────────────────── barcode ─────────────────────────── */
@@ -436,6 +583,10 @@
 
   el.scanBtn.addEventListener('click', scan);
   el.themeBtn.addEventListener('click', toggleTheme);
+
+  // On the view rather than the video: the reticle sits on top, and this way the
+  // camera bar's own buttons are the only thing we have to filter out.
+  el.cameraView.addEventListener('pointerdown', handleFocusTap);
 
   el.manualBtn.addEventListener('click', () => {
     showResult('');

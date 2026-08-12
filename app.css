@@ -42,7 +42,9 @@ html, body {
    The viewfinder sits on a live video frame, so its chrome stays dark in both
    themes — these colours are deliberately literal rather than themed tokens. */
 
-#camera-view { background: #000; }
+/* manipulation: the whole view is a tap-to-focus target, so we don't want the
+   browser holding taps back waiting to see whether a double-tap zoom follows. */
+#camera-view { background: #000; touch-action: manipulation; }
 
 #video {
   width: 100%;
@@ -50,6 +52,28 @@ html, body {
   object-fit: cover;
   display: block;
   background: #000;
+}
+
+/* Positioned by left/top with a negative margin rather than a centring
+   translate, which leaves transform free for the animation below. */
+#focus-ring {
+  position: absolute;
+  width: 76px;
+  height: 76px;
+  margin: -38px 0 0 -38px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  opacity: 0;
+}
+#focus-ring.is-active { animation: focus-pulse 1.1s ease-out forwards; }
+
+@keyframes focus-pulse {
+  0%   { opacity: 0; transform: scale(1.4); }
+  18%  { opacity: 1; transform: scale(1); }
+  70%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
 }
 
 #reticle {
@@ -151,7 +175,10 @@ html, body {
   max-width: 88%;
 }
 .status.is-error { border-color: var(--danger); color: #ffd3d3; }
-.status.is-error .spinner { display: none; }
+/* A note isn't a failure, so it keeps the neutral chrome — it just isn't
+   waiting on anything, so the spinner goes. */
+.status.is-error .spinner,
+.status.is-note .spinner { display: none; }
 
 .spinner {
   width: 15px;
@@ -307,4 +334,13 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 2s; }
   .shutter-ring { transition: none; }
+  /* The ring still has to confirm the tap, so fade it without the scale. */
+  #focus-ring.is-active { animation: focus-fade 1.1s ease-out forwards; }
+}
+
+@keyframes focus-fade {
+  0%   { opacity: 0; }
+  18%  { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
 }
