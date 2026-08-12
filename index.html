@@ -17,7 +17,7 @@
   })();
 </script>
 <title>NumBar Scanner</title>
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="app.css?v=2">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>▌▏▌</text></svg>">
 </head>
 <body>
@@ -100,6 +100,10 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="app.js"></script>
+<!-- Bump ?v= whenever app.js or app.css changes. The browser revalidates this
+     page but happily keeps a cached script, and pairing fresh HTML with a stale
+     app.js breaks in confusing ways — a UPC-A default with no padding code
+     behind it rejects every short code. A new query string is a new URL. -->
+<script src="app.js?v=2"></script>
 </body>
 </html>
