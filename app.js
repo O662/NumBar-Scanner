@@ -23,12 +23,40 @@
     barcodeError: $('barcode-error'),
     format: $('format'),
     formatUsed: $('format-used'),
+    themeBtn: $('theme-btn'),
+    themeMeta: document.querySelector('meta[name="theme-color"]'),
   };
 
   let stream = null;
   let facingMode = 'environment';
   let ocrWorkerPromise = null;
   let busy = false;
+
+  /* ─────────────────────────── theme ───────────────────────────
+     The <head> script has already picked the starting theme; this keeps the
+     button, the browser chrome colour and localStorage in step after that. */
+
+  const THEME_KEY = 'numbar-theme';
+  const THEME_META = { dark: '#000000', light: '#ffffff' };
+
+  function currentTheme() {
+    return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    if (el.themeMeta) el.themeMeta.setAttribute('content', THEME_META[theme]);
+    el.themeBtn.setAttribute(
+      'aria-label',
+      theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+    );
+  }
+
+  function toggleTheme() {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* private mode: this session only */ }
+  }
 
   /* ─────────────────────────── camera ─────────────────────────── */
 
@@ -407,6 +435,7 @@
   /* ─────────────────────────── wiring ─────────────────────────── */
 
   el.scanBtn.addEventListener('click', scan);
+  el.themeBtn.addEventListener('click', toggleTheme);
 
   el.manualBtn.addEventListener('click', () => {
     showResult('');
@@ -448,5 +477,6 @@
     else if (el.cameraView.classList.contains('is-active')) startCamera();
   });
 
+  applyTheme(currentTheme());
   startCamera();
 })();
