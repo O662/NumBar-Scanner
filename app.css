@@ -4,8 +4,8 @@
   --line: #2a2f3a;
   --text: #f2f4f8;
   --muted: #9aa3b2;
-  --accent: #ffc043;
-  --accent-ink: #2b1d00;
+  --accent: #ee2824;
+  --accent-ink: #fff;
   --danger: #ff6b6b;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -200,7 +200,7 @@ html, body {
   padding: 16px 12px;
   outline: none;
 }
-.digits:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255, 192, 67, 0.18); }
+.digits:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(238, 40, 36, 0.22); }
 
 .barcode-card {
   width: 100%;
