@@ -16,7 +16,7 @@ no data leaves the device.
    (`O`→`0`, `l`→`1`, `S`→`5`, `B`→`8`, …) and spaced-out digits (`4 1 2 2 0 …`) are joined.
 4. **Barcode** — rendered with [JsBarcode](https://github.com/lindell/JsBarcode). The digits sit above
    the barcode in an editable field; **tap them to fix anything OCR got wrong** and the barcode
-   redraws as you type. **Clear & scan again** wipes it and returns to the camera.
+   redraws as you type. **Clear & scan again** wipes it and returns to the camera. That's all folks!
 
 ## Symbology
 
