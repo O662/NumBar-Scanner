@@ -23,21 +23,39 @@ no data leaves the device.
 
 ## Focus support
 
-Focus is driven through `MediaStreamTrack.applyConstraints`, which browsers implement very unevenly:
+Focus and zoom are driven through `MediaStreamTrack.applyConstraints`, which browsers implement very unevenly:
 
-| Browser | Continuous AF | Tap to focus |
-| --- | --- | --- |
-| Chrome / Edge on Android | yes | yes, on the exact point |
-| Chrome on desktop | depends on the webcam | usually a plain refocus, no point |
-| Safari (iOS and macOS) | OS default only | no — the constraints don't exist |
+| Browser | Continuous AF | Tap to focus | Zoom / manual focus sliders |
+| --- | --- | --- | --- |
+| Chrome / Edge on Android | yes | yes, on the point where the lens allows it | where the camera reports them |
+| Chrome on desktop | depends on the webcam | usually a plain refocus, no point | rarely |
+| Safari (iOS and macOS) | OS default only | no — the constraints don't exist | no |
 
-`pointsOfInterest` is never reported by `getCapabilities()`, so the app tries the tapped point and quietly
-falls back to a plain refocus if the device rejects it. Where there's no focus control at all, the first tap
-says so once rather than showing a focus ring that does nothing.
+Rather less declarative than that table makes it look. Three Chrome behaviours in particular will leave a
+tap doing nothing at all, and the app works around each:
+
+- **Capabilities arrive late.** `getCapabilities()` answers with a bare set — no `focusMode`, no `zoom` —
+  until the camera is genuinely running. The app waits for the first frame before believing it, and never
+  caches an answer that names no controls, because caching that is indistinguishable from a browser that
+  has no camera controls at all. If the camera describes itself later still, the sliders appear then.
+- **Zoom is behind a permission.** Chrome omits the `zoom` capability entirely unless the stream was opened
+  asking for pan-tilt-zoom, so the app requests `zoom: true` up front and comes back for a plain camera if
+  that ask is refused.
+- **`advanced[]` constraints fail in silence.** Anything a device can't honour inside an `advanced` block is
+  skipped while the promise resolves anyway, so "did it work?" always answered yes. The app sends plain
+  constraints first — those reject, which is information — and keeps `advanced[]` only for engines that
+  won't take these keys outside it. `applyConstraints` also *replaces* a track's constraints rather than
+  merging into them, so every call re-sends the whole set; otherwise a focus tap would drop your zoom.
+
+`pointsOfInterest` is never reported by `getCapabilities()`, so the app sends the tapped point and reads the
+track back to see whether it stuck. Where it didn't, the lens is walked out of continuous AF and back, since
+a camera already in continuous mode treats "be continuous" as a no-op and never looks again. Where there's
+no focus control whatsoever, the first tap says so once rather than showing a focus ring that does nothing.
 
 None of this beats physics: most phone main cameras can't focus nearer than roughly 10 cm. If a label won't
 come sharp, back off and let the reticle crop do the work — the frame inside the box is upscaled before OCR
-anyway, so a smaller, sharp number reads better than a large, blurry one.
+anyway, so a smaller, sharp number reads better than a large, blurry one. The zoom slider is the honest way
+round the near limit: it fills the box from a distance the lens can actually focus at.
 
 ## Symbology
 

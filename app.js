@@ -25,6 +25,13 @@
     barcodeError: $('barcode-error'),
     format: $('format'),
     formatUsed: $('format-used'),
+    camControls: $('cam-controls'),
+    zoomRow: $('zoom-row'),
+    zoomRange: $('zoom-range'),
+    zoomValue: $('zoom-value'),
+    focusRow: $('focus-row'),
+    focusRange: $('focus-range'),
+    focusAutoBtn: $('focus-auto'),
     themeBtn: $('theme-btn'),
     themeMeta: document.querySelector('meta[name="theme-color"]'),
   };
@@ -75,22 +82,36 @@
     }
 
     stopCamera();
+
+    const want = {
+      facingMode: { ideal: facingMode },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    };
+
+    /* `zoom: true` is the pan-tilt-zoom opt-in. Chrome refuses to admit a
+       camera has zoom at all — getCapabilities().zoom simply isn't there —
+       unless the stream was opened asking for it, which is why the zoom
+       slider never appeared on Android. Browsers that don't know the key
+       discard it. Asking does mean a slightly different permission prompt, so
+       if the ask itself is what fails we come back for a plain camera rather
+       than losing the picture over a nicety. */
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
+        video: Object.assign({ zoom: true }, want),
         audio: false,
       });
-    } catch (err) {
-      const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
-      return showCameraError(
-        denied
-          ? 'Camera permission was blocked. Allow camera access for this site in your browser settings, then reload.'
-          : 'Could not open the camera (' + (err && err.name ? err.name : 'unknown error') + '). Use “Type it in” instead.'
-      );
+    } catch (_) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: want, audio: false });
+      } catch (err) {
+        const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+        return showCameraError(
+          denied
+            ? 'Camera permission was blocked. Allow camera access for this site in your browser settings, then reload.'
+            : 'Could not open the camera (' + (err && err.name ? err.name : 'unknown error') + '). Use “Type it in” instead.'
+        );
+      }
     }
 
     el.cameraError.hidden = true;
@@ -98,7 +119,9 @@
     try { await el.video.play(); } catch (_) { /* autoplay attrs usually cover this */ }
 
     videoTrack = stream.getVideoTracks()[0] || null;
-    await enableContinuousFocus();
+    const opened = videoTrack;
+
+    warmUpOcr();
 
     // Only offer the flip button when there is something to flip to.
     try {
@@ -106,7 +129,34 @@
       el.flipBtn.hidden = devices.filter((d) => d.kind === 'videoinput').length < 2;
     } catch (_) { /* ignore */ }
 
-    warmUpOcr();
+    // Everything below is built out of the track's capabilities, and those
+    // aren't trustworthy until the camera is genuinely running — see caps().
+    await trackReady();
+    if (videoTrack !== opened) return;   // flipped or stopped while we waited
+    await enableContinuousFocus();
+    setupCameraControls();
+  }
+
+  /** Resolve once the camera is pushing frames and has owned up to what it can
+      do. Bounded at both ends: a camera that never answers must not leave the
+      viewfinder without controls forever. */
+  async function trackReady() {
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      setTimeout(finish, 1500);
+      if (el.video.requestVideoFrameCallback) el.video.requestVideoFrameCallback(finish);
+      else if (el.video.readyState >= 2) finish();
+      else el.video.addEventListener('loadeddata', finish, { once: true });
+    });
+    for (let i = 0; i < 10 && !controlsKnown(); i++) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
+  function controlsKnown() {
+    const c = caps();
+    return !!(c.focusMode || c.zoom || c.focusDistance);
   }
 
   function stopCamera() {
@@ -114,9 +164,13 @@
     stream = null;
     // The next camera may be a different lens with different focus capabilities.
     videoTrack = null;
-    focusCaps = null;
+    trackCaps = null;
+    applied = {};
+    manualFocus = false;
     pinnedUntil = 0;
+    focusHintShown = false;
     clearTimeout(refocusTimer);
+    el.camControls.hidden = true;
   }
 
   function showCameraError(message) {
@@ -125,29 +179,75 @@
     el.scanBtn.disabled = true;
   }
 
-  /* ─────────────────────────── focus ───────────────────────────
+  /* ─────────────────────── focus and zoom ───────────────────────
      A UPC line has to sit close to fill the reticle, and that is exactly where
      phone cameras hunt: continuous AF keeps drifting onto whatever is behind
      the label. So we hold continuous AF as the resting state, let a tap pin the
      focus to one spot for a few seconds, and re-focus on the reticle just
-     before a scan. Where the browser exposes no focus control at all (Safari
-     ships none of these constraints) every call below no-ops and the tap
-     handler says so once instead of pretending. */
+     before a scan.
+
+     When AF still won't settle there are two manual escapes, each offered only
+     where the device reports it. The focus slider drives the lens directly
+     (focusMode: 'manual') and simply stays where it's put. The zoom slider is
+     the one that beats physics: zooming in fills the reticle from a distance
+     the camera can actually focus at, rather than pushing inside its ~10 cm
+     near limit where nothing will ever be sharp. Where the browser exposes no
+     focus control at all (Safari ships none of these constraints) every call
+     below no-ops, both sliders stay hidden, and the tap handler says so once
+     instead of pretending.
+
+     None of this is as declarative as it looks. Chrome answers getCapabilities()
+     with a bare set until the camera is actually running, hides zoom entirely
+     unless the stream was opened asking for pan-tilt-zoom, silently discards
+     anything in an advanced[] block it can't honour while resolving the promise
+     anyway, and replaces a track's whole constraint set on every applyConstraints
+     call rather than merging. So: wait for the camera before believing it, ask
+     for PTZ up front, prefer plain constraints because those actually reject,
+     confirm against getSettings(), and re-send the whole set every time. */
 
   const REFOCUS_MS = 3000;    // how long a tapped focus point stays pinned
   const AF_SETTLE_MS = 450;   // single-shot AF reports "applied", not "converged"
+  const FOCUS_STEPS = 1000;   // focus slider resolution, mapped onto the lens range below
 
-  let focusCaps = null;
+  const POI_TOLERANCE = 0.12;  // how close a read-back focus point has to land
+
+  let trackCaps = null;
   let refocusTimer = null;
   let pinnedUntil = 0;
+  let manualFocus = false;
   let focusHintShown = false;
 
-  function focusModes() {
-    if (!videoTrack || !videoTrack.getCapabilities) return [];
-    if (!focusCaps) {
-      try { focusCaps = videoTrack.getCapabilities() || {}; } catch (_) { focusCaps = {}; }
+  /** Chrome fills a track's capabilities in asynchronously: for the first
+      moment after getUserMedia resolves it answers with a bare set that names
+      no focus control, and only later admits to focusMode and the rest. We
+      used to read that once and cache it, which is indistinguishable from a
+      browser that has no camera controls at all — every tap then took the
+      "this browser won't let the page drive focus" path and both sliders
+      stayed hidden for the life of the stream. So only an answer that names a
+      control we can actually use is worth keeping; anything else we ask again. */
+  function caps() {
+    if (!videoTrack || !videoTrack.getCapabilities) return {};
+    if (trackCaps) return trackCaps;
+    let now = {};
+    try { now = videoTrack.getCapabilities() || {}; } catch (_) { now = {}; }
+    if (now.focusMode || now.zoom || now.focusDistance) {
+      trackCaps = now;
+      // Startup only waits so long, so a camera slower than that had its
+      // sliders hidden on the strength of an answer it hadn't finished giving.
+      // This is the moment it finally said something: build them now. Not
+      // re-entrant — trackCaps is set, so the call below won't come back here.
+      setTimeout(setupCameraControls, 0);
     }
-    return focusCaps.focusMode || [];
+    return now;
+  }
+
+  function trackSettings() {
+    if (!videoTrack || !videoTrack.getSettings) return {};
+    try { return videoTrack.getSettings() || {}; } catch (_) { return {}; }
+  }
+
+  function focusModes() {
+    return caps().focusMode || [];
   }
 
   function canFocus() {
@@ -155,39 +255,221 @@
     return modes.includes('single-shot') || modes.includes('continuous');
   }
 
-  async function applyFocus(constraint) {
+  /** A capability range is only worth a slider if it actually spans something. */
+  function usableRange(range) {
+    return range && typeof range.min === 'number' && range.max > range.min ? range : null;
+  }
+
+  function canManualFocus() {
+    return focusModes().includes('manual') && !!usableRange(caps().focusDistance);
+  }
+
+  function canZoom() {
+    return !!usableRange(caps().zoom);
+  }
+
+  /* applyConstraints replaces a track's whole constraint set rather than
+     merging into it, so sending a bare {focusMode} would quietly drop the zoom
+     the user just dialled in. Everything we ask the camera for therefore lives
+     in one object that gets re-sent in full on every change. A null in
+     `changes` means "stop asking for this". */
+  let applied = {};
+
+  async function applyCamera(changes) {
     if (!videoTrack) return false;
-    // advanced[] so a device that doesn't understand one of these just ignores
-    // it rather than failing the whole constraint set.
+
+    const next = Object.assign({}, applied, changes);
+    Object.keys(next).forEach((k) => { if (next[k] === null) delete next[k]; });
+
+    /* Plainly first, advanced[] second, and that order is the whole point:
+       anything inside advanced[] that a device can't honour is skipped in
+       silence and the promise still resolves, so the old code's "did it
+       work?" answer was always yes and its fallback path was dead. A plain
+       constraint set rejects instead, which is information — we only reach
+       for advanced[] for engines that won't take these keys outside it. */
+    if (!await sendConstraints(next) && !await sendConstraints({ advanced: [next] })) return false;
+    applied = next;
+    return true;
+  }
+
+  async function sendConstraints(constraints) {
     try {
-      await videoTrack.applyConstraints({ advanced: [constraint] });
+      await videoTrack.applyConstraints(constraints);
       return true;
     } catch (_) {
       return false;
     }
   }
 
+  /* Leaving manual behind means dropping the focusDistance with it. A lens
+     handed "continuous, and also sit at 8 cm" honours whichever half it feels
+     like, and a slider the user has since walked away from is not a request. */
+  const AUTO = { focusDistance: null, pointsOfInterest: null };
+
   async function enableContinuousFocus() {
+    setManualFocus(false);
     if (!focusModes().includes('continuous')) return false;
-    return applyFocus({ focusMode: 'continuous' });
+    return applyCamera(Object.assign({ focusMode: 'continuous' }, AUTO));
+  }
+
+  /** Did the camera actually take the focus point we handed it? */
+  function aimedAt(point) {
+    const poi = trackSettings().pointsOfInterest;
+    if (!poi || !poi.length) return false;
+    const got = poi[0];
+    return Math.abs(got.x - point.x) < POI_TOLERANCE
+      && Math.abs(got.y - point.y) < POI_TOLERANCE;
+  }
+
+  /** A camera already in continuous AF ignores being told to enter continuous
+      AF: the resting state is also the request, so nothing happens and the
+      lens goes on staring at the background. Take it away for a beat and hand
+      it back — the mode change is what restarts the hunt. Any focus point in
+      play is deliberately left in the set: a device that took it should keep
+      it, and this is exactly the case where we can't tell whether it did. */
+  async function nudgeFocus() {
+    if (!focusModes().includes('manual')) return false;
+    const f = usableRange(caps().focusDistance);
+    const near = f ? f.min + (f.max - f.min) * 0.02 : null;
+    const parked = await applyCamera(near === null
+      ? { focusMode: 'manual' }
+      : { focusMode: 'manual', focusDistance: near });
+    if (!parked) return false;
+    await new Promise((r) => setTimeout(r, 80));
+    const back = await applyCamera({ focusMode: 'continuous', focusDistance: null });
+    // A hunt started from the wrong end of the lens takes longer than the
+    // settle a caller allows for one already in progress, so hold here for the
+    // difference rather than photographing the sweep.
+    if (back) await new Promise((r) => setTimeout(r, 250));
+    return back;
   }
 
   /** Aim AF at one spot in the frame, given as normalised 0–1 coordinates. */
   async function focusAt(point) {
     if (!canFocus()) return false;
-    const mode = focusModes().includes('single-shot') ? 'single-shot' : 'continuous';
+    const single = focusModes().includes('single-shot');
+    const mode = single ? 'single-shot' : 'continuous';
 
+    setManualFocus(false);
     clearTimeout(refocusTimer);
-    // pointsOfInterest is never advertised in getCapabilities(), so the only way
-    // to learn whether a device takes one is to try, then retry without it — a
-    // plain re-apply still re-triggers AF, just wherever the camera prefers.
-    const applied = await applyFocus({ focusMode: mode, pointsOfInterest: [point] })
-      || await applyFocus({ focusMode: mode });
-    if (!applied) return false;
+
+    // pointsOfInterest is never advertised in getCapabilities(), so the only
+    // way to find out whether a device takes one is to send it. A rejection
+    // means no; silence means maybe — Chrome will accept the focusMode half of
+    // this and drop the point on the floor without saying anything.
+    const aimed = await applyCamera({
+      focusMode: mode, focusDistance: null, pointsOfInterest: [point],
+    });
+    if (!aimed) {
+      // Wouldn't take a point at all. The mode on its own is still worth
+      // asking for: the hunt then happens wherever the camera prefers to look,
+      // which beats a lens parked on whatever is behind the label.
+      const plain = await applyCamera({
+        focusMode: mode, focusDistance: null, pointsOfInterest: null,
+      });
+      if (!plain) return false;
+    }
+
+    /* single-shot re-runs its hunt on every apply, so it has already gone.
+       Continuous has not: it was continuous before the tap and it is
+       continuous now. Where the track won't confirm the point — either it
+       ignored it or it just doesn't report it — that shove is the only thing
+       standing between a tap and nothing happening at all. */
+    if (!single && !aimedAt(point)) await nudgeFocus();
 
     // single-shot leaves focus locked, so hand it back to continuous after a beat.
-    if (mode === 'single-shot') refocusTimer = setTimeout(enableContinuousFocus, REFOCUS_MS);
+    if (single) refocusTimer = setTimeout(enableContinuousFocus, REFOCUS_MS);
     return true;
+  }
+
+  /* ───────────────── the manual sliders ───────────────── */
+
+  /* focusDistance is reported in metres, so the near end of the range — the
+     only part that matters for a label held under the lens — is a thin slice at
+     the bottom of it, which a linear slider would cross in a couple of pixels.
+     Squaring the position spends most of the travel down there instead: the
+     step per pixel falls to nothing as you approach the near end, which is what
+     makes hand-focusing on a barcode possible at all. Right-hand end is near. */
+  function sliderToDistance(pos) {
+    const f = caps().focusDistance;
+    const t = 1 - pos / FOCUS_STEPS;
+    return f.min + (f.max - f.min) * t * t;
+  }
+
+  function distanceToSlider(distance) {
+    const f = caps().focusDistance;
+    const norm = Math.min(1, Math.max(0, (distance - f.min) / (f.max - f.min)));
+    return Math.round((1 - Math.sqrt(norm)) * FOCUS_STEPS);
+  }
+
+  /** applyConstraints is async and a dragged slider fires far faster than a lens
+      can answer, so only ever keep the latest value in flight. */
+  function coalesced(apply) {
+    let running = false;
+    let queued = null;
+    return (value) => {
+      queued = value;
+      if (running) return;
+      running = true;
+      (async () => {
+        while (queued !== null) {
+          const next = queued;
+          queued = null;
+          await apply(next);
+        }
+        running = false;
+      })();
+    };
+  }
+
+  const pushFocusDistance = coalesced((focusDistance) =>
+    applyCamera({ focusMode: 'manual', focusDistance, pointsOfInterest: null }));
+
+  const pushZoom = coalesced((zoom) => applyCamera({ zoom }));
+
+  function setManualFocus(on) {
+    manualFocus = on;
+    el.focusRange.classList.toggle('is-idle', !on);
+    el.focusAutoBtn.disabled = !on;
+  }
+
+  /** Cameras report zoom in whatever units they like — 1–8, 100–800 — so show it
+      as a multiple of the wide end rather than the raw number. */
+  function showZoom(value) {
+    const z = caps().zoom;
+    const ratio = z && z.min > 0 ? value / z.min : value;
+    el.zoomValue.textContent = ratio.toFixed(1) + '×';
+  }
+
+  function setupCameraControls() {
+    const now = trackSettings();
+
+    const zoomOk = canZoom();
+    if (zoomOk) {
+      const z = caps().zoom;
+      const value = typeof now.zoom === 'number' ? now.zoom : z.min;
+      el.zoomRange.min = z.min;
+      el.zoomRange.max = z.max;
+      el.zoomRange.step = z.step > 0 ? z.step : (z.max - z.min) / 100;
+      el.zoomRange.value = value;
+      showZoom(value);
+    }
+    el.zoomRow.hidden = !zoomOk;
+
+    const focusOk = canManualFocus();
+    if (focusOk) {
+      el.focusRange.min = 0;
+      el.focusRange.max = FOCUS_STEPS;
+      el.focusRange.step = 1;
+      // Parked at the near end, which is the reason anyone reaches for this.
+      el.focusRange.value = typeof now.focusDistance === 'number'
+        ? distanceToSlider(now.focusDistance)
+        : FOCUS_STEPS;
+      setManualFocus(false);
+    }
+    el.focusRow.hidden = !focusOk;
+
+    el.camControls.hidden = !(zoomOk || focusOk);
   }
 
   function settle() {
@@ -211,22 +493,36 @@
   }
 
   function handleFocusTap(e) {
-    if (!videoTrack || (e.target.closest && e.target.closest('button'))) return;
+    if (!videoTrack) return;
+    // Everything in the dock — shutter, sliders, the padding around them —
+    // belongs to the control it sits in, not to the viewfinder behind it.
+    if (e.target.closest && e.target.closest('.camera-dock')) return;
     const point = framePoint(e.clientX, e.clientY);
     if (!point) return;
     if (!canFocus()) return focusUnsupportedHint();
 
     showFocusRing(e.clientX, e.clientY);
     pinnedUntil = Date.now() + REFOCUS_MS;
-    focusAt(point);
+    // A tap on the picture is a request for AF back. The ring confirms the tap
+    // landed either way, but if the lens turned out not to be drivable after
+    // all — capabilities said one thing, applyConstraints another — say so
+    // rather than leaving a pulse that promised something it didn't do.
+    focusAt(point).then((ok) => { if (!ok) focusUnsupportedHint(); });
   }
 
+  /** Two different disappointments, and it matters which one you're having:
+      a browser that exposes no focus control, or a lens that has one but
+      wouldn't take the point. Both end in "hold further back", for the same
+      reason — nothing focuses inside about 10 cm. */
   function focusUnsupportedHint() {
     if (focusHintShown) return;
     focusHintShown = true;
     setStatus(
-      'This browser won’t let the page drive focus. Pull back a little — ' +
-      'most phone cameras can’t focus closer than about 10 cm.',
+      canFocus()
+        ? 'This camera won’t take a focus point — it picks for itself. Fill the ' +
+          'box from a little further back, or zoom in.'
+        : 'This browser won’t let the page drive focus. Pull back a little — ' +
+          'most phone cameras can’t focus closer than about 10 cm.',
       'note', 4600
     );
   }
@@ -471,10 +767,12 @@
       const region = reticleInFrame();
       if (!region) throw new Error('no frame');
 
-      // Re-focus on the reticle before reading it — but a recent tap wins, so we
-      // don't drag focus off a spot the user just picked. The OCR worker loads
-      // while AF settles, so this usually costs nothing.
-      const focusing = Date.now() < pinnedUntil ? null : focusAt(regionCentre(region));
+      // Re-focus on the reticle before reading it — but a recent tap wins, and a
+      // hand-set focus wins outright, so we never drag the lens off a spot the
+      // user just picked. The OCR worker loads while AF settles, so this usually
+      // costs nothing.
+      const keepFocus = manualFocus || Date.now() < pinnedUntil;
+      const focusing = keepFocus ? null : focusAt(regionCentre(region));
       const worker = await getOcrWorker();
       if (focusing && await focusing) await settle();
 
@@ -643,6 +941,22 @@
   // On the view rather than the video: the reticle sits on top, and this way the
   // camera bar's own buttons are the only thing we have to filter out.
   el.cameraView.addEventListener('pointerdown', handleFocusTap);
+
+  el.zoomRange.addEventListener('input', () => {
+    const value = Number(el.zoomRange.value);
+    showZoom(value);
+    pushZoom(value);
+  });
+
+  el.focusRange.addEventListener('input', () => {
+    setManualFocus(true);
+    // Hand focus over for good: no pending re-focus timer, no tap still pinned.
+    clearTimeout(refocusTimer);
+    pinnedUntil = 0;
+    pushFocusDistance(sliderToDistance(Number(el.focusRange.value)));
+  });
+
+  el.focusAutoBtn.addEventListener('click', enableContinuousFocus);
 
   el.manualBtn.addEventListener('click', () => {
     showResult('');

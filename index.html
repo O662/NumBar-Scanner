@@ -17,7 +17,7 @@
   })();
 </script>
 <title>NumBar Scanner</title>
-<link rel="stylesheet" href="app.css?v=2">
+<link rel="stylesheet" href="app.css?v=3">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>▌▏▌</text></svg>">
 </head>
 <body>
@@ -38,12 +38,29 @@
 
   <div id="camera-error" class="overlay-message" hidden></div>
 
-  <div class="camera-bar">
-    <button id="manual-btn" class="ghost-btn" type="button">Type</button>
-    <button id="scan-btn" class="shutter" type="button" aria-label="Scan">
-      <span class="shutter-ring"></span>
-    </button>
-    <button id="flip-btn" class="ghost-btn" type="button" hidden>Flip</button>
+  <div class="camera-dock">
+    <!-- Each row is unhidden only where the camera reports that control, so on a
+         browser with no constraint support the panel stays empty and invisible. -->
+    <div id="cam-controls" class="cam-controls" hidden>
+      <div id="zoom-row" class="control-row" hidden>
+        <span class="control-label">Zoom</span>
+        <input id="zoom-range" class="control-range" type="range" aria-label="Zoom">
+        <span id="zoom-value" class="control-value">1.0×</span>
+      </div>
+      <div id="focus-row" class="control-row" hidden>
+        <span class="control-label">Focus</span>
+        <input id="focus-range" class="control-range is-idle" type="range" aria-label="Manual focus">
+        <button id="focus-auto" class="control-btn" type="button" disabled>Auto</button>
+      </div>
+    </div>
+
+    <div class="camera-bar">
+      <button id="manual-btn" class="ghost-btn" type="button">Type</button>
+      <button id="scan-btn" class="shutter" type="button" aria-label="Scan">
+        <span class="shutter-ring"></span>
+      </button>
+      <button id="flip-btn" class="ghost-btn" type="button" hidden>Flip</button>
+    </div>
   </div>
 
   <div id="status" class="status" role="status" aria-live="polite" hidden>
@@ -104,6 +121,6 @@
      page but happily keeps a cached script, and pairing fresh HTML with a stale
      app.js breaks in confusing ways — a UPC-A default with no padding code
      behind it rejects every short code. A new query string is a new URL. -->
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
