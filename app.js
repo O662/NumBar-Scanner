@@ -1,4 +1,4 @@
-/* NumBar Scanner — point the camera at a screen or label, read the UPC digits,
+/* NumBar Scanner, point the camera at a screen or label, read the UPC digits,
    turn them into a scannable barcode. Everything runs in the browser. */
 
 (() => {
@@ -90,7 +90,7 @@
     };
 
     /* `zoom: true` is the pan-tilt-zoom opt-in. Chrome refuses to admit a
-       camera has zoom at all — getCapabilities().zoom simply isn't there —
+       camera has zoom at all , getCapabilities().zoom simply isn't there
        unless the stream was opened asking for it, which is why the zoom
        slider never appeared on Android. Browsers that don't know the key
        discard it. Asking does mean a slightly different permission prompt, so
@@ -130,7 +130,7 @@
     } catch (_) { /* ignore */ }
 
     // Everything below is built out of the track's capabilities, and those
-    // aren't trustworthy until the camera is genuinely running — see caps().
+    // aren't trustworthy until the camera is genuinely running, see caps().
     await trackReady();
     if (videoTrack !== opened) return;   // flipped or stopped while we waited
     await enableContinuousFocus();
@@ -221,7 +221,7 @@
       moment after getUserMedia resolves it answers with a bare set that names
       no focus control, and only later admits to focusMode and the rest. We
       used to read that once and cache it, which is indistinguishable from a
-      browser that has no camera controls at all — every tap then took the
+      browser that has no camera controls at all , every tap then took the
       "this browser won't let the page drive focus" path and both sliders
       stayed hidden for the life of the stream. So only an answer that names a
       control we can actually use is worth keeping; anything else we ask again. */
@@ -235,7 +235,7 @@
       // Startup only waits so long, so a camera slower than that had its
       // sliders hidden on the strength of an answer it hadn't finished giving.
       // This is the moment it finally said something: build them now. Not
-      // re-entrant — trackCaps is set, so the call below won't come back here.
+      // re-entrant , trackCaps is set, so the call below won't come back here.
       setTimeout(setupCameraControls, 0);
     }
     return now;
@@ -285,7 +285,7 @@
        anything inside advanced[] that a device can't honour is skipped in
        silence and the promise still resolves, so the old code's "did it
        work?" answer was always yes and its fallback path was dead. A plain
-       constraint set rejects instead, which is information — we only reach
+       constraint set rejects instead, which is information , we only reach
        for advanced[] for engines that won't take these keys outside it. */
     if (!await sendConstraints(next) && !await sendConstraints({ advanced: [next] })) return false;
     applied = next;
@@ -324,7 +324,7 @@
   /** A camera already in continuous AF ignores being told to enter continuous
       AF: the resting state is also the request, so nothing happens and the
       lens goes on staring at the background. Take it away for a beat and hand
-      it back — the mode change is what restarts the hunt. Any focus point in
+      it back , the mode change is what restarts the hunt. Any focus point in
       play is deliberately left in the set: a device that took it should keep
       it, and this is exactly the case where we can't tell whether it did. */
   async function nudgeFocus() {
@@ -355,7 +355,7 @@
 
     // pointsOfInterest is never advertised in getCapabilities(), so the only
     // way to find out whether a device takes one is to send it. A rejection
-    // means no; silence means maybe — Chrome will accept the focusMode half of
+    // means no; silence means maybe , Chrome will accept the focusMode half of
     // this and drop the point on the floor without saying anything.
     const aimed = await applyCamera({
       focusMode: mode, focusDistance: null, pointsOfInterest: [point],
@@ -372,8 +372,8 @@
 
     /* single-shot re-runs its hunt on every apply, so it has already gone.
        Continuous has not: it was continuous before the tap and it is
-       continuous now. Where the track won't confirm the point — either it
-       ignored it or it just doesn't report it — that shove is the only thing
+       continuous now. Where the track won't confirm the point , either it
+       ignored it or it just doesn't report it , that shove is the only thing
        standing between a tap and nothing happening at all. */
     if (!single && !aimedAt(point)) await nudgeFocus();
 
@@ -384,8 +384,8 @@
 
   /* ───────────────── the manual sliders ───────────────── */
 
-  /* focusDistance is reported in metres, so the near end of the range — the
-     only part that matters for a label held under the lens — is a thin slice at
+  /* focusDistance is reported in metres, so the near end of the range , the
+     only part that matters for a label held under the lens , is a thin slice at
      the bottom of it, which a linear slider would cross in a couple of pixels.
      Squaring the position spends most of the travel down there instead: the
      step per pixel falls to nothing as you approach the near end, which is what
@@ -433,7 +433,7 @@
     el.focusAutoBtn.disabled = !on;
   }
 
-  /** Cameras report zoom in whatever units they like — 1–8, 100–800 — so show it
+  /** Cameras report zoom in whatever units they like , 1–8, 100–800 , so show it
       as a multiple of the wide end rather than the raw number. */
   function showZoom(value) {
     const z = caps().zoom;
@@ -494,7 +494,7 @@
 
   function handleFocusTap(e) {
     if (!videoTrack) return;
-    // Everything in the dock — shutter, sliders, the padding around them —
+    // Everything in the dock , shutter, sliders, the padding around them ,
     // belongs to the control it sits in, not to the viewfinder behind it.
     if (e.target.closest && e.target.closest('.camera-dock')) return;
     const point = framePoint(e.clientX, e.clientY);
@@ -505,7 +505,7 @@
     pinnedUntil = Date.now() + REFOCUS_MS;
     // A tap on the picture is a request for AF back. The ring confirms the tap
     // landed either way, but if the lens turned out not to be drivable after
-    // all — capabilities said one thing, applyConstraints another — say so
+    // all , capabilities said one thing, applyConstraints another , say so
     // rather than leaving a pulse that promised something it didn't do.
     focusAt(point).then((ok) => { if (!ok) focusUnsupportedHint(); });
   }
@@ -513,16 +513,16 @@
   /** Two different disappointments, and it matters which one you're having:
       a browser that exposes no focus control, or a lens that has one but
       wouldn't take the point. Both end in "hold further back", for the same
-      reason — nothing focuses inside about 10 cm. */
+      reason , nothing focuses inside about 10 cm. */
   function focusUnsupportedHint() {
     if (focusHintShown) return;
     focusHintShown = true;
     setStatus(
       canFocus()
-        ? 'This camera won’t take a focus point — it picks for itself. Fill the ' +
-          'box from a little further back, or zoom in.'
-        : 'This browser won’t let the page drive focus. Pull back a little — ' +
-          'most phone cameras can’t focus closer than about 10 cm.',
+        ? 'No focus point , ' +
+          'go further back, or zoom in.'
+        : 'Browser won’t let page drive focus. Pull back a little. ' +
+          '(most phone cameras can’t focus closer than about 10 cm.)',
       'note', 4600
     );
   }
@@ -572,7 +572,7 @@
   }
 
   /** A viewport point as normalised frame coordinates, or null if it lands
-      outside the frame altogether — the camera has no such point to focus on. */
+      outside the frame altogether , the camera has no such point to focus on. */
   function framePoint(clientX, clientY) {
     const fit = coverFit();
     if (!fit) return null;
@@ -697,7 +697,7 @@
     return raw.replace(/^[^0-9]*[ .\-]/, '').replace(/[ .\-][^0-9]*$/, '');
   }
 
-  /** How much of a candidate was already a real digit — keeps words like "SILO" out. */
+  /** How much of a candidate was already a real digit , keeps words like "SILO" out. */
   function digitRatio(raw) {
     const real = (raw.match(/[0-9]/g) || []).length;
     const converted = toDigits(raw).length;
@@ -767,7 +767,7 @@
       const region = reticleInFrame();
       if (!region) throw new Error('no frame');
 
-      // Re-focus on the reticle before reading it — but a recent tap wins, and a
+      // Re-focus on the reticle before reading it , but a recent tap wins, and a
       // hand-set focus wins outright, so we never drag the lens off a spot the
       // user just picked. The OCR worker loads while AF settles, so this usually
       // costs nothing.
@@ -794,7 +794,7 @@
           return;
         }
       }
-      setStatus('No number found — hold steady, fill the box, avoid glare.', 'error', 3200);
+      setStatus('No number found , hold steady, fill the box, avoid glare.', 'error', 3200);
     } catch (err) {
       console.error(err);
       setStatus('Text reader failed to load. Check your connection.', 'error', 3600);
@@ -839,8 +839,8 @@
     return (10 - (sum % 10)) % 10;
   }
 
-  /* The scanners these codes get shown to only read UPC-A, so a short number —
-     a 4- or 5-digit produce PLU, an in-store code — has to travel inside one:
+  /* The scanners these codes get shown to only read UPC-A, so a short number ,
+     a 4- or 5-digit produce PLU, an in-store code , has to travel inside one:
      right-align it in the 11-digit body, zero-fill the front, append the check
      digit. 4011 becomes 000000040112, the same twelve digits a till looks up
      when a cashier keys the PLU in by hand. A number that is already 12 digits
@@ -874,7 +874,7 @@
 
     if (!value) {
       return fail(
-        digits.length + ' digits is more than UPC-A can carry — it tops out at 12. ' +
+        digits.length + ' digits is more than UPC-A can carry , it tops out at 12. ' +
         'Shorten the number, or pick another symbology.'
       );
     }
