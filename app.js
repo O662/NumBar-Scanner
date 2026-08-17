@@ -382,6 +382,183 @@
     return true;
   }
 
+  /* ───────────── measured focus (contrast detection) ─────────────
+     Asking the camera to focus and hoping is what every tap did until now, and
+     on a barcode held close it loses often: the lens is a few centimetres from
+     a flat, low-contrast label, and the phone's own AF is weighing the whole
+     scene when it decides what the subject is. Where the lens can be driven by
+     hand there is a better answer — drive it ourselves, look at what comes
+     back, and keep whatever is sharpest. That is what any AF does internally.
+     The difference is that ours is looking at the reticle and nothing else.
+
+     Everything here is relative. Absolute sharpness depends on the label, the
+     print and the light, so no fixed threshold would survive contact with a
+     real shelf; the only comparison worth anything is between two readings of
+     the same scene moments apart. The camera's own attempt is measured first
+     and stays in the running, so a sweep can only ever improve on it — if it
+     can't, the lens goes straight back to AF. */
+
+  const SWEEP_STEPS = 9;      // rungs of the coarse pass across the focus range
+  const SWEEP_REFINES = 2;    // halving rounds closing in on the coarse winner
+  const LENS_MS = 80;         // lens travel to allow before a reading counts
+  const SHARP_PATCH = 320;    // px of reticle centre sampled, at 1:1
+  const SWEEP_MARGIN = 1.10;  // how much a sweep must beat AF by to be believed
+
+  let sharpCanvas = null;
+  let focusJob = 0;           // bumped per tap; an older sweep sees it and stops
+  let focusWork = null;       // in flight, so a scan can wait rather than race
+
+  function pause(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  /** Resolve on the next painted frame, so a reading is never taken of the
+      picture that was already on screen before the lens moved. */
+  function nextFrame() {
+    return new Promise((resolve) => {
+      if (!el.video.requestVideoFrameCallback) return setTimeout(resolve, 60);
+      let done = false;
+      const fin = () => { if (!done) { done = true; resolve(); } };
+      el.video.requestVideoFrameCallback(fin);
+      setTimeout(fin, 90);
+    });
+  }
+
+  /** Gradient energy across the middle of the reticle, sampled at native
+      resolution — scaling the crop down first would low-pass away the very
+      detail that separates a sharp frame from a soft one. Green stands in for
+      luma: it carries most of the detail and costs nothing to read. */
+  function sharpness() {
+    const r = reticleInFrame();
+    if (!r || !el.video.videoWidth) return 0;
+
+    const w = Math.max(8, Math.min(SHARP_PATCH, Math.round(r.sw)));
+    const h = Math.max(8, Math.min(SHARP_PATCH, Math.round(r.sh)));
+    const sx = r.sx + (r.sw - w) / 2;
+    const sy = r.sy + (r.sh - h) / 2;
+
+    if (!sharpCanvas) sharpCanvas = document.createElement('canvas');
+    sharpCanvas.width = w;
+    sharpCanvas.height = h;
+    const c = sharpCanvas.getContext('2d', { willReadFrequently: true });
+    c.drawImage(el.video, sx, sy, w, h, 0, 0, w, h);
+
+    let d;
+    try { d = c.getImageData(0, 0, w, h).data; } catch (_) { return 0; }
+
+    const stride = w * 4;
+    let sum = 0;
+    let n = 0;
+    for (let y = 2; y < h - 2; y += 2) {
+      for (let x = 2; x < w - 2; x += 2) {
+        const i = y * stride + x * 4 + 1;
+        const gx = d[i + 8] - d[i - 8];                 // two pixels either side
+        const gy = d[i + stride * 2] - d[i - stride * 2];
+        sum += gx * gx + gy * gy;
+        n++;
+      }
+    }
+    return n ? sum / n : 0;
+  }
+
+  /** Park the lens at one point on the focus slider's curve and read back what
+      the reticle looks like from there. */
+  async function probe(pos, token) {
+    const distance = sliderToDistance(pos);
+    const set = await applyCamera({
+      focusMode: 'manual', focusDistance: distance, pointsOfInterest: null,
+    });
+    if (!set || token !== focusJob) return null;
+    // Lens travel, then two frames: the first one out of the camera can still
+    // be mid-move or mid-exposure, and one bad reading is enough to put the
+    // peak in the wrong place for the whole sweep.
+    await pause(LENS_MS);
+    await nextFrame();
+    await nextFrame();
+    if (token !== focusJob) return null;
+    return { pos, distance, score: sharpness() };
+  }
+
+  /** Walk the focus range and return the sharpest place on it. The walk
+      follows the slider's own curve rather than the raw metres, which spends
+      most of its rungs down at the near end where a held-up label actually is. */
+  async function sweepFocus(token) {
+    let best = null;
+    for (let i = 0; i <= SWEEP_STEPS; i++) {
+      const shot = await probe((i / SWEEP_STEPS) * FOCUS_STEPS, token);
+      if (!shot) return null;
+      if (!best || shot.score > best.score) best = shot;
+    }
+    if (!best) return null;
+
+    /* The coarse grid is deliberately coarse and the real peak sits between
+       two of its rungs, so close in on it: each round tries half a gap either
+       side of the current winner and halves again. This is where the accuracy
+       actually comes from — at 12 cm the depth of field is thin enough that
+       landing one coarse rung away is still visibly soft. */
+    let span = FOCUS_STEPS / SWEEP_STEPS / 2;
+    for (let round = 0; round < SWEEP_REFINES; round++) {
+      for (const pos of [best.pos - span, best.pos + span]) {
+        if (pos < 0 || pos > FOCUS_STEPS) continue;
+        const shot = await probe(pos, token);
+        if (token !== focusJob) return null;
+        if (shot && shot.score > best.score) best = shot;
+      }
+      span /= 2;
+    }
+    return best;
+  }
+
+  /** What a tap means now: aim the camera's own AF at the spot, then check its
+      work and beat it where we can. */
+  async function sharpenAt(point) {
+    const token = ++focusJob;
+    const drove = await focusAt(point);
+    if (token !== focusJob) return;
+
+    if (!canManualFocus()) {
+      if (!drove) focusUnsupportedHint();   // native AF was the whole toolbox
+      return;
+    }
+
+    // Let AF finish before judging it. A reading taken mid-hunt is a reading
+    // of a lens in motion, which is blur by definition and not AF's fault.
+    await settle();
+    let native = sharpness();
+    await pause(220);
+    if (token !== focusJob) return;
+    native = Math.max(native, sharpness());
+
+    // From here the lens is ours: nothing gets to drag it back to continuous
+    // half way through the sweep.
+    clearTimeout(refocusTimer);
+    setStatus('Finding focus…');
+
+    const best = await sweepFocus(token);
+    if (token !== focusJob) return;
+
+    if (!best || best.score <= native * SWEEP_MARGIN) {
+      // AF had it, or the sweep couldn't prove otherwise. Hand the lens back
+      // rather than locking it somewhere no better than where it started.
+      await focusAt(point);
+      if (token === focusJob) hideStatus();
+      return;
+    }
+
+    await applyCamera({
+      focusMode: 'manual', focusDistance: best.distance, pointsOfInterest: null,
+    });
+    if (token !== focusJob) return;
+    clearTimeout(refocusTimer);
+    pinnedUntil = 0;
+    setManualFocus(true);                 // the slider now holds what we found
+    el.focusRange.value = distanceToSlider(best.distance);
+
+    // Hard against the near stop means the label is closer than this lens can
+    // resolve, and no amount of driving it will change that.
+    setStatus(best.pos >= FOCUS_STEPS * 0.97
+      ? 'Focused as near as this lens goes — if it’s still soft, back off and zoom in.'
+      : 'Focus locked on the box.', 'note', 2400);
+  }
+
   /* ───────────────── the manual sliders ───────────────── */
 
   /* focusDistance is reported in metres, so the near end of the range , the
@@ -503,11 +680,10 @@
 
     showFocusRing(e.clientX, e.clientY);
     pinnedUntil = Date.now() + REFOCUS_MS;
-    // A tap on the picture is a request for AF back. The ring confirms the tap
-    // landed either way, but if the lens turned out not to be drivable after
-    // all , capabilities said one thing, applyConstraints another , say so
-    // rather than leaving a pulse that promised something it didn't do.
-    focusAt(point).then((ok) => { if (!ok) focusUnsupportedHint(); });
+    // A tap is a request for the sharpest focus available on that spot, which
+    // is not the same thing as a request for autofocus, and on this hardware
+    // often isn't satisfied by it.
+    focusWork = sharpenAt(point).finally(() => { focusWork = null; });
   }
 
   /** Two different disappointments, and it matters which one you're having:
@@ -766,6 +942,14 @@
     try {
       const region = reticleInFrame();
       if (!region) throw new Error('no frame');
+
+      // A tap still working through its sweep is about to land on the sharpest
+      // focus available; reading the frame out from under it would throw that
+      // away for the sake of a second.
+      if (focusWork) {
+        setStatus('Finding focus…');
+        await focusWork;
+      }
 
       // Re-focus on the reticle before reading it , but a recent tap wins, and a
       // hand-set focus wins outright, so we never drag the lens off a spot the

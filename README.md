@@ -7,9 +7,11 @@ no data leaves the device.
 ## How it works
 
 1. **Camera** — live preview with a reticle. Line the `UPC 4122074227` line up inside the box and tap **SCAN**.
-2. **Focus** — continuous autofocus is switched on with the stream, **tapping the preview** pins focus on that
-   spot for three seconds, and every scan re-focuses on the reticle before it reads a frame (a tap you just made
-   wins over that). See [Focus support](#focus-support) — Safari gives web pages no focus control at all.
+2. **Focus** — continuous autofocus is switched on with the stream, and every scan re-focuses on the reticle
+   before it reads a frame. **Tapping the preview** asks for the sharpest focus available on that spot: the
+   camera's own AF goes first, and where the lens can be driven by hand the app then sweeps it and keeps
+   whichever position actually looks sharpest, locking there. See [Focus support](#focus-support) — Safari
+   gives web pages no focus control at all.
 3. **OCR** — the frame inside the box is cropped, upscaled and contrast-stretched, then read by
    [Tesseract.js](https://tesseract.projectnaptha.com/). If the first pass finds nothing it retries
    rotated 90° and 270° (for when you're photographing a handheld device held sideways), then falls
@@ -51,6 +53,24 @@ tap doing nothing at all, and the app works around each:
 track back to see whether it stuck. Where it didn't, the lens is walked out of continuous AF and back, since
 a camera already in continuous mode treats "be continuous" as a no-op and never looks again. Where there's
 no focus control whatsoever, the first tap says so once rather than showing a focus ring that does nothing.
+
+### Measured focus
+
+Even a tap that lands correctly often leaves the label soft: the lens is centimetres from a flat, low-contrast
+barcode, and the phone's AF is weighing the whole scene when it decides what the subject is. So where the
+device exposes `focusDistance`, a tap doesn't stop at asking. The app measures gradient energy over the middle
+of the reticle at native resolution, walks the lens across its range (following the focus slider's own curve,
+which spends most of its travel down at the near end), closes in on the winner with two halving rounds, and
+locks there. Roughly fifteen readings, about two seconds, with `Finding focus…` on screen throughout.
+
+Two things keep that honest. The comparison is always relative — absolute sharpness depends on the label, the
+print and the light, so no fixed threshold would survive a real shelf — and the camera's own attempt is
+measured first and stays in the running. A sweep has to beat AF by 10% to be believed; if it can't, the lens
+goes straight back to autofocus. When the winning position is hard against the near stop, the label is closer
+than the glass can resolve and the app says so instead of pretending otherwise.
+
+The result lands in the focus slider, so you can nudge it by hand from there, and **Auto** hands the lens back
+to continuous AF.
 
 None of this beats physics: most phone main cameras can't focus nearer than roughly 10 cm. If a label won't
 come sharp, back off and let the reticle crop do the work — the frame inside the box is upscaled before OCR
